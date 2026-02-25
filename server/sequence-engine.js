@@ -12,8 +12,16 @@ import { updateLeadStatus, updateLeadSequenceStep } from "./leads-store.js";
 
 dotenv.config();
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL = "claude-sonnet-4-20250514";
+
+// Lazy-init so the env var is guaranteed to be loaded
+let _anthropic;
+function getAnthropicClient() {
+  if (!_anthropic) {
+    _anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  }
+  return _anthropic;
+}
 
 // Progress tracking — stored in memory, exposed via API
 let currentProgress = {
@@ -80,7 +88,7 @@ async function callClaude(userPrompt, useWebSearch = false) {
 
   const systemPrompt = await buildSystemPrompt();
 
-  const response = await anthropic.messages.create({
+  const response = await getAnthropicClient().messages.create({
     model: MODEL,
     max_tokens: 1500,
     system: systemPrompt,
