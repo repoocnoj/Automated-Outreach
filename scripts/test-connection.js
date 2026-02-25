@@ -70,6 +70,19 @@ async function testAll() {
     console.log("   ⚠️  No linkedin-posts.json found (optional).\n");
   }
 
+  // 5. Test Apify
+  console.log("5. Apify API...");
+  try {
+    if (!process.env.APIFY_API_TOKEN) throw new Error("APIFY_API_TOKEN not set");
+    const { ApifyClient } = await import("apify-client");
+    const client = new ApifyClient({ token: process.env.APIFY_API_TOKEN });
+    const user = await client.user().get();
+    console.log(`   ✅ Apify connected. Account: ${user.username}\n`);
+  } catch (err) {
+    console.log(`   ❌ Apify: ${err.message}\n`);
+    allPassed = false;
+  }
+
   console.log("═══════════════════════════════════════════════════");
   if (allPassed) {
     console.log("  ✅ ALL CONNECTIONS PASSED");

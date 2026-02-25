@@ -13,6 +13,7 @@ import {
   getLinkedInPosts,
   updateProspectStatus,
 } from "./sheets-client.js";
+import { fetchLinkedInPosts } from "./apify-linkedin.js";
 
 dotenv.config();
 
@@ -262,6 +263,12 @@ export async function generateAllDrafts() {
 
   const prospectDrafts = await draftProspectEmails();
   const contactDrafts = await draftStayInTouchEmails();
+  // Fetch fresh LinkedIn posts via Apify before drafting comments
+  try {
+    await fetchLinkedInPosts();
+  } catch (err) {
+    console.warn("⚠️  Apify LinkedIn fetch failed, using existing posts:", err.message);
+  }
   const linkedinDrafts = await draftLinkedInComments();
 
   const allDrafts = [...prospectDrafts, ...contactDrafts, ...linkedinDrafts];
