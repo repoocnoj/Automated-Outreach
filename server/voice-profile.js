@@ -175,3 +175,92 @@ RESPOND WITH ONLY THIS JSON (no markdown, no backticks):
   "researchNotes": "brief context on why this post is relevant"
 }
 `;
+
+// ═══════════════════════════════════════════════════════════════
+// SEQUENCE PROMPTS
+// ═══════════════════════════════════════════════════════════════
+
+export const SEQUENCE_EMAIL_PROMPT = (lead, stepNumber, totalSteps, previousSteps, sequenceContext) => `
+Draft email step ${stepNumber} of ${totalSteps} in an outreach sequence to this prospect.
+
+PROSPECT:
+- Name: ${lead.name}
+- Title: ${lead.title}
+- Company: ${lead.company}
+- Company Size: ${lead.companySize || "Unknown"}
+- Industry: ${lead.industry || "Unknown"}
+- Pain Signal: ${lead.painSignal || "None identified"}
+- Notes: ${lead.notes || "None"}
+
+SEQUENCE CONTEXT:
+${sequenceContext || "This is a cold outreach sequence."}
+
+${previousSteps.length > 0 ? `PREVIOUS STEPS IN THIS SEQUENCE (do NOT repeat these — build on them):
+${previousSteps.map((s) => `Step ${s.stepNumber} (${s.modality}): Subject: "${s.subject}" — ${s.body.substring(0, 100)}...`).join("\n")}` : "This is the FIRST touch. Make it count."}
+
+STEP ${stepNumber} GUIDELINES:
+${stepNumber === 1 ? `- First email: Lead with something specific about THEM. Introduce Overalls through ONE compelling case study. Ask one question.` : ""}
+${stepNumber === 2 ? `- Follow-up: Reference the first email briefly ("I reached out last week about..."). Add a NEW angle or case study. Keep it shorter.` : ""}
+${stepNumber === 3 ? `- Third touch: Try a different approach — share a relevant data point, industry trend, or article. Keep it brief and value-forward.` : ""}
+${stepNumber >= 4 && stepNumber < totalSteps ? `- Later follow-up: Be concise. Reference previous outreach without being pushy. Offer one specific thing (case study, ROI model, intro to a peer).` : ""}
+${stepNumber === totalSteps ? `- Final email: Be direct but gracious. "Closing the loop" tone. Offer one last concrete value prop. Make it easy to say yes or no.` : ""}
+
+${stepNumber === 1 ? "Use web search to research this prospect." : "Do NOT use web search for this step — reference your earlier research."}
+
+Keep under ${stepNumber === 1 ? "200" : "120"} words.
+
+RESPOND WITH ONLY THIS JSON (no markdown, no backticks):
+{
+  "subject": "subject line here",
+  "body": "full email body here",
+  "researchNotes": "${stepNumber === 1 ? "what you found about them" : "n/a"}"
+}
+`;
+
+export const SEQUENCE_LINKEDIN_PROMPT = (lead, stepNumber, totalSteps, previousSteps) => `
+Draft a LinkedIn direct message as step ${stepNumber} of ${totalSteps} in an outreach sequence.
+
+PROSPECT:
+- Name: ${lead.name}
+- Title: ${lead.title}
+- Company: ${lead.company}
+- Notes: ${lead.notes || "None"}
+
+PREVIOUS STEPS:
+${previousSteps.map((s) => `Step ${s.stepNumber} (${s.modality}): "${s.subject || s.body?.substring(0, 60)}"`).join("\n") || "None yet"}
+
+GUIDELINES:
+- LinkedIn messages should be casual and conversational (under 100 words)
+- Reference the email outreach naturally if this comes after emails
+- Don't repeat the same pitch — add a new angle
+- If this is a connection request, include a brief personalized note
+
+RESPOND WITH ONLY THIS JSON:
+{
+  "body": "the LinkedIn message here",
+  "researchNotes": "n/a"
+}
+`;
+
+export const SEQUENCE_TEXT_PROMPT = (lead, stepNumber, totalSteps, previousSteps) => `
+Draft a text/SMS message as step ${stepNumber} of ${totalSteps} in an outreach sequence.
+
+PROSPECT:
+- Name: ${lead.name}
+- Company: ${lead.company}
+
+PREVIOUS STEPS:
+${previousSteps.map((s) => `Step ${s.stepNumber} (${s.modality}): "${s.subject || s.body?.substring(0, 60)}"`).join("\n") || "None yet"}
+
+GUIDELINES:
+- Text messages must be under 50 words
+- Very casual, human tone
+- Reference previous outreach: "Hey [name], sent you an email about..."
+- One simple ask or value prop
+
+RESPOND WITH ONLY THIS JSON:
+{
+  "body": "the text message here",
+  "researchNotes": "n/a"
+}
+`;

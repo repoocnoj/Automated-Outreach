@@ -14,6 +14,8 @@ import {
   updateProspectStatus,
 } from "./sheets-client.js";
 import { fetchLinkedInPosts } from "./apify-linkedin.js";
+import { getVoiceConfig, getEmailExamples } from "./voice-store.js";
+import { updateLeadStatus, updateLeadSequenceStep } from "./leads-store.js";
 
 dotenv.config();
 
@@ -21,8 +23,52 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL = "claude-sonnet-4-20250514";
 
 // ═══════════════════════════════════════════════════════════════
+// DAILY PROGRESS TRACKING
+// ═══════════════════════════════════════════════════════════════
+
+let dailyProgress = {
+  active: false,
+  current: "",
+  completed: 0,
+  total: 0,
+  percent: 0,
+};
+
+export function getDailyProgress() {
+  return { ...dailyProgress };
+}
+
+// ═══════════════════════════════════════════════════════════════
 // CORE DRAFTING FUNCTION
 // ═══════════════════════════════════════════════════════════════
+
+async function buildSystemPrompt() {
+  const config = getVoiceConfig();
+  const examples = getEmailExamples();
+
+  let prompt = VOICE_PROFILE;
+
+  // Add custom instructions if enabled
+  if (config.useCustom && config.customInstructions) {
+    prompt += `\n\n## ADDITIONAL INSTRUCTIONS FROM USER\n${config.customInstructions}\n`;
+  }
+
+  // Add email examples as few-shot references
+  if (examples.length > 0) {
+    prompt += `\n\n## EXAMPLE EMAILS THAT HAVE PERFORMED WELL\nUse these as style references. Match their tone, structure, and approach:\n\n`;
+    // Include up to 10 best examples to avoid token limits
+    const topExamples = examples.slice(0, 10);
+    topExamples.forEach((ex, i) => {
+      prompt += `### Example ${i + 1}`;
+      if (ex.performance) prompt += ` (${ex.performance})`;
+      prompt += `\n`;
+      if (ex.subject) prompt += `Subject: ${ex.subject}\n`;
+      prompt += `${ex.body}\n\n`;
+    });
+  }
+
+  return prompt;
+}
 
 async function callClaude(userPrompt, useWebSearch = true) {
   const tools = useWebSearch
@@ -32,7 +78,7 @@ async function callClaude(userPrompt, useWebSearch = true) {
   const response = await anthropic.messages.create({
     model: MODEL,
     max_tokens: 1500,
-    system: VOICE_PROFILE,
+    system: await buildSystemPrompt(),
     tools,
     messages: [{ role: "user", content: userPrompt }],
   });
@@ -261,8 +307,13 @@ export async function generateAllDrafts() {
   console.log(`  ${new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}`);
   console.log("═══════════════════════════════════════════════════");
 
+  dailyProgress = { active: true, current: "Drafting prospect emails...", completed: 0, total: 3, percent: 0 };
+
   const prospectDrafts = await draftProspectEmails();
+  dailyProgress = { ...dailyProgress, current: "Drafting stay-in-touch emails...", completed: 1, percent: 33 };
+
   const contactDrafts = await draftStayInTouchEmails();
+  dailyProgress = { ...dailyProgress, current: "Drafting LinkedIn comments...", completed: 2, percent: 66 };
   // Fetch fresh LinkedIn posts via Apify before drafting comments
   try {
     await fetchLinkedInPosts();
@@ -296,6 +347,8 @@ export async function generateAllDrafts() {
   console.log(`     💾 Saved to ${outputPath}`);
   console.log("     🖥️  Open http://localhost:3000 to review and approve");
   console.log("═══════════════════════════════════════════════════\n");
+
+  dailyProgress = { active: false, current: "Complete", completed: 3, total: 3, percent: 100 };
 
   return allDrafts;
 }

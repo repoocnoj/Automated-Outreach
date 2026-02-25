@@ -5,6 +5,7 @@ export default function Header({
   onApproveAll,
   onSendAll,
   onGenerate,
+  onExport,
   sendingAll,
   generating,
 }) {
@@ -67,6 +68,23 @@ export default function Header({
         </p>
       </div>
       <div style={{ display: "flex", gap: 8 }}>
+        {onExport && counts.all > 0 && (
+          <button
+            onClick={() => onExport()}
+            style={{
+              padding: "8px 16px",
+              borderRadius: 8,
+              border: "1px solid #E8E6E1",
+              background: "#fff",
+              cursor: "pointer",
+              fontSize: 12,
+              fontWeight: 600,
+              color: "#666",
+            }}
+          >
+            Export CSV
+          </button>
+        )}
         <button
           onClick={onGenerate}
           disabled={generating}

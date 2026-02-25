@@ -3,6 +3,7 @@ import Header from "./Header.jsx";
 import FilterBar from "./FilterBar.jsx";
 import MessageCard from "./MessageCard.jsx";
 import MessageDetail from "./MessageDetail.jsx";
+import ProgressIndicator from "./ProgressIndicator.jsx";
 
 const API = "/api";
 
@@ -14,6 +15,7 @@ export default function Dashboard() {
   const [sendingAll, setSendingAll] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [showDailyProgress, setShowDailyProgress] = useState(false);
 
   // ── Fetch drafts from API ──────────────────────────────────
   const fetchDrafts = useCallback(async () => {
@@ -107,9 +109,10 @@ export default function Dashboard() {
 
   const handleGenerate = async () => {
     setGenerating(true);
+    setShowDailyProgress(true);
     try {
       await apiPost(`${API}/generate`);
-      showToast("Draft generation started — check back in a few minutes");
+      showToast("Draft generation started");
       // Poll more frequently while generating
       setTimeout(fetchDrafts, 30000);
       setTimeout(fetchDrafts, 60000);
@@ -120,6 +123,20 @@ export default function Dashboard() {
     } finally {
       setTimeout(() => setGenerating(false), 5000);
     }
+  };
+
+  const handleExport = async (statusFilter) => {
+    const url = statusFilter
+      ? `${API}/export/csv?status=${statusFilter}`
+      : `${API}/export/csv`;
+    const response = await fetch(url);
+    const blob = await response.blob();
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = downloadUrl;
+    a.download = `outreach-export-${new Date().toISOString().split("T")[0]}.csv`;
+    a.click();
+    window.URL.revokeObjectURL(downloadUrl);
   };
 
   // ── Filtering & Counts ────────────────────────────────────
@@ -147,14 +164,7 @@ export default function Dashboard() {
 
   // ── Render ─────────────────────────────────────────────────
   return (
-    <div
-      style={{
-        fontFamily: "'Instrument Sans', 'DM Sans', -apple-system, sans-serif",
-        background: "#F8F7F4",
-        minHeight: "100vh",
-        color: "#1A1A1A",
-      }}
-    >
+    <div style={{ background: "#F8F7F4", minHeight: "calc(100vh - 40px)" }}>
       {/* Toast */}
       {toast && (
         <div
@@ -181,9 +191,20 @@ export default function Dashboard() {
         onApproveAll={handleApproveAll}
         onSendAll={handleSendAll}
         onGenerate={handleGenerate}
+        onExport={handleExport}
         sendingAll={sendingAll}
         generating={generating}
       />
+
+      {showDailyProgress && (
+        <ProgressIndicator
+          type="daily"
+          onComplete={() => {
+            setShowDailyProgress(false);
+            fetchDrafts();
+          }}
+        />
+      )}
 
       <FilterBar
         filter={filter}

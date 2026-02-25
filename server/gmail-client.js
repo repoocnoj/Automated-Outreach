@@ -1,6 +1,7 @@
 import { google } from "googleapis";
 import fs from "fs";
 import dotenv from "dotenv";
+import { updateLeadStatus } from "./leads-store.js";
 
 dotenv.config();
 
@@ -120,6 +121,15 @@ export async function sendApprovedEmails() {
       sent++;
       results.push({ id: draft.id, recipient: draft.recipient, status: "sent" });
       console.log(`   ✓ ${draft.recipient} (${draft.recipientEmail})`);
+
+      // Update lead status if this draft is linked to a lead
+      if (draft.leadId) {
+        try {
+          updateLeadStatus(draft.leadId, "sent");
+        } catch (e) {
+          // Non-fatal
+        }
+      }
 
       // Gmail rate limit: max 1 email per 2 seconds
       await new Promise((r) => setTimeout(r, 2000));
