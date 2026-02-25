@@ -1,0 +1,38 @@
+[
+  {
+    "name": "Marcus Williams",
+    "email": "m.williams@smartsheet.com",
+    "title": "CHRO",
+    "company": "Smartsheet",
+    "companySize": "3200",
+    "industry": "Tech / SaaS",
+    "linkedinUrl": "https://linkedin.com/in/marcuswilliams",
+    "painSignal": "Recently expanded workforce, Glassdoor reviews cite benefits gaps for working parents",
+    "status": "queued",
+    "notes": "Joined from Zillow 8 months ago"
+  },
+  {
+    "name": "Diana Patel",
+    "email": "d.patel@databricks.com",
+    "title": "Head of Total Rewards",
+    "company": "Databricks",
+    "companySize": "7000",
+    "industry": "Tech / AI",
+    "linkedinUrl": "https://linkedin.com/in/dianapatel",
+    "painSignal": "Younger workforce, recently expanded parental leave but no caregiving benefit",
+    "status": "queued",
+    "notes": "Previously at Stripe. Company valued at $43B."
+  },
+  {
+    "name": "Robert Chen",
+    "email": "r.chen@paloaltonetworks.com",
+    "title": "VP People Operations",
+    "company": "Palo Alto Networks",
+    "companySize": "15000",
+    "industry": "Cybersecurity",
+    "linkedinUrl": "",
+    "painSignal": "High-stress workforce, recently announced wellbeing initiative",
+    "status": "queued",
+    "notes": ""
+  }
+]

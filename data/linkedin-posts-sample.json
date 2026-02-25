@@ -1,0 +1,20 @@
+[
+  {
+    "author": "Jennifer Moss",
+    "authorTitle": "Bestselling author, workplace wellbeing speaker",
+    "content": "Why employee wellbeing programs fail: they address symptoms, not root causes. Companies spend billions on meditation apps and lunch perks while ignoring the structural issues crushing their people. Your employees don't need another app. They need actual support.",
+    "url": "https://www.linkedin.com/feed/update/example1",
+    "likes": 2400,
+    "comments": 187,
+    "date": "2026-02-24"
+  },
+  {
+    "author": "Josh Bersin",
+    "authorTitle": "HR industry analyst, CEO of The Josh Bersin Company",
+    "content": "The average large employer now has 17 different point solutions in their benefits stack. Employees are drowning in apps they never use. The future is consolidation and concierge — someone to actually navigate the system for you.",
+    "url": "https://www.linkedin.com/feed/update/example2",
+    "likes": 3100,
+    "comments": 245,
+    "date": "2026-02-23"
+  }
+]

@@ -1,0 +1,24 @@
+[
+  {
+    "name": "Alex Rivera",
+    "email": "alex.r@hingehealth.com",
+    "relationship": "Former colleague, met at benefits conference",
+    "company": "Hinge Health",
+    "title": "VP Operations",
+    "lastContactDate": "2025-10-15",
+    "sharedContext": "Discussed scaling human-touch services with technology. Alex mentioned interest in partnership opportunities.",
+    "frequency": "quarterly",
+    "notes": "Hinge Health raised $600M Series E. Keep warm for potential partnership."
+  },
+  {
+    "name": "Priya Sharma",
+    "email": "priya@benefitfocus.com",
+    "relationship": "Industry peer, connected at IFEBP conference",
+    "company": "Benefitfocus",
+    "title": "Director of Product",
+    "lastContactDate": "2025-08-20",
+    "sharedContext": "We discussed benefits platform integration opportunities. She was interested in how Overalls handles the execution layer.",
+    "frequency": "monthly",
+    "notes": ""
+  }
+]

@@ -1,0 +1,13 @@
+node_modules/
+.env
+*.json
+!package.json
+!*-sample.json
+!vite.config.js
+!tsconfig.json
+data/drafts-*.json
+gmail-token.json
+google-service-account.json
+gmail-credentials.json
+dist/
+.DS_Store

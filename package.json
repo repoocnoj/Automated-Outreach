@@ -1,0 +1,22 @@
+{
+  "name": "overalls-outreach",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "node server/index.js",
+    "generate": "node scripts/generate-drafts.js",
+    "test-connections": "node scripts/test-connection.js",
+    "auth-gmail": "node server/gmail-auth.js",
+    "send": "node -e \"import('./server/gmail-client.js').then(m => m.sendApprovedEmails())\"",
+    "setup": "bash scripts/setup.sh"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "googleapis": "^144.0.0",
+    "node-cron": "^3.0.3"
+  }
+}
