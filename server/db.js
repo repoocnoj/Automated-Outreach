@@ -80,6 +80,9 @@ export async function initDatabase() {
       performance VARCHAR(255),
       added_at TIMESTAMP DEFAULT NOW()
     );
+    
+-- Ensure email uniqueness for ON CONFLICT in addLeads
+    CREATE UNIQUE INDEX IF NOT EXISTS leads_email_unique ON leads(email);
 
     -- Insert default voice config if not exists
     INSERT INTO voice_config (id, custom_instructions, use_custom)
