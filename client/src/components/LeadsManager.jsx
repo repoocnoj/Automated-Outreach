@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
+import { useAuth } from "../context/AuthContext.jsx";
 import SequenceBuilder from "./SequenceBuilder.jsx";
-import ProgressIndicator from "./ProgressIndicator.jsx";
+import ProgressOverlay from "./ProgressOverlay.jsx";
 
 const API = "/api";
 
@@ -13,24 +14,28 @@ const STATUS_COLORS = {
 };
 
 export default function LeadsManager() {
+  const { apiFetch, user } = useAuth();
   const [leads, setLeads] = useState([]);
   const [counts, setCounts] = useState({});
   const [total, setTotal] = useState(0);
   const [selected, setSelected] = useState(new Set());
   const [statusFilter, setStatusFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState("");
+  const [assigneeFilter, setAssigneeFilter] = useState("");
   const [search, setSearch] = useState("");
   const [uploadResult, setUploadResult] = useState(null);
   const [showSequenceBuilder, setShowSequenceBuilder] = useState(false);
   const [showProgress, setShowProgress] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [teamMembers, setTeamMembers] = useState([]);
 
   const fetchLeads = useCallback(async () => {
     try {
-      const url = statusFilter
-        ? `${API}/leads?status=${statusFilter}`
-        : `${API}/leads`;
-      const res = await fetch(url);
+      const params = new URLSearchParams();
+      if (statusFilter) params.set("status", statusFilter);
+      if (assigneeFilter) params.set("assignedTo", assigneeFilter);
+      const url = params.toString() ? `${API}/leads?${params}` : `${API}/leads`;
+      const res = await apiFetch(url);
       const data = await res.json();
       setLeads(data.leads || []);
       setCounts(data.counts || {});
@@ -40,11 +45,25 @@ export default function LeadsManager() {
     } finally {
       setLoading(false);
     }
-  }, [statusFilter]);
+  }, [statusFilter, assigneeFilter, apiFetch]);
+
+  const fetchTeam = useCallback(async () => {
+    try {
+      const res = await apiFetch(`${API}/team`);
+      const data = await res.json();
+      setTeamMembers(data.members || []);
+    } catch (err) {
+      console.error("Failed to fetch team:", err);
+    }
+  }, [apiFetch]);
 
   useEffect(() => {
     fetchLeads();
   }, [fetchLeads]);
+
+  useEffect(() => {
+    fetchTeam();
+  }, [fetchTeam]);
 
   // Filtered leads
   const filtered = leads.filter((l) => {
@@ -89,7 +108,7 @@ export default function LeadsManager() {
     const formData = new FormData();
     formData.append("file", file);
     try {
-      const res = await fetch(`${API}/leads/upload`, {
+      const res = await apiFetch(`${API}/leads/upload`, {
         method: "POST",
         body: formData,
       });
@@ -108,10 +127,24 @@ export default function LeadsManager() {
   // Delete selected
   const handleDeleteSelected = async () => {
     for (const id of selected) {
-      await fetch(`${API}/leads/${id}`, { method: "DELETE" });
+      await apiFetch(`${API}/leads/${id}`, { method: "DELETE" });
     }
     setSelected(new Set());
     fetchLeads();
+  };
+
+  // Assign selected leads to a team member
+  const handleAssign = async (userId) => {
+    try {
+      await apiFetch(`${API}/leads/assign`, {
+        method: "POST",
+        body: JSON.stringify({ leadIds: [...selected], userId }),
+      });
+      setSelected(new Set());
+      fetchLeads();
+    } catch (err) {
+      console.error("Failed to assign leads:", err);
+    }
   };
 
   // Export selected as CSV
@@ -223,9 +256,9 @@ export default function LeadsManager() {
         )}
       </div>
 
-      {/* Progress indicator */}
+      {/* Progress overlay */}
       {showProgress && (
-        <ProgressIndicator
+        <ProgressOverlay
           type="sequence"
           onComplete={() => {
             setShowProgress(false);
@@ -293,6 +326,39 @@ export default function LeadsManager() {
             ))}
           </select>
         )}
+        {teamMembers.length > 1 && (
+          <select
+            value={assigneeFilter}
+            onChange={(e) => setAssigneeFilter(e.target.value)}
+            style={{
+              padding: "8px 12px",
+              borderRadius: 8,
+              border: "1px solid #E8E6E1",
+              fontSize: 12,
+              background: "#fff",
+            }}
+          >
+            <option value="">All assignees</option>
+            {teamMembers.map((m) => (
+              <option key={m.id} value={m.id}>{m.name}</option>
+            ))}
+          </select>
+        )}
+        <button
+          onClick={() => setAssigneeFilter(assigneeFilter === user.id ? "" : user.id)}
+          style={{
+            padding: "8px 12px",
+            borderRadius: 8,
+            border: "1px solid #E8E6E1",
+            fontSize: 12,
+            fontWeight: 600,
+            background: assigneeFilter === user.id ? "#1A1A1A" : "#fff",
+            color: assigneeFilter === user.id ? "#fff" : "#666",
+            cursor: "pointer",
+          }}
+        >
+          My Leads
+        </button>
 
         {/* Selection controls */}
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
@@ -365,6 +431,29 @@ export default function LeadsManager() {
           >
             Export Selected
           </button>
+          {teamMembers.length > 0 && (
+            <select
+              onChange={(e) => {
+                if (e.target.value) handleAssign(e.target.value);
+                e.target.value = "";
+              }}
+              value=""
+              style={{
+                padding: "8px 12px",
+                borderRadius: 8,
+                border: "1px solid #E8E6E1",
+                fontSize: 12,
+                background: "#fff",
+                fontWeight: 600,
+                color: "#666",
+              }}
+            >
+              <option value="">Assign to...</option>
+              {teamMembers.map((m) => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+            </select>
+          )}
           <button
             onClick={handleDeleteSelected}
             style={{
@@ -414,6 +503,7 @@ export default function LeadsManager() {
               <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "#888", fontSize: 11 }}>Company</th>
               <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "#888", fontSize: 11 }}>Status</th>
               <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "#888", fontSize: 11 }}>Step</th>
+              <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "#888", fontSize: 11 }}>Assignee</th>
               <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "#888", fontSize: 11 }}>Source</th>
               <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "#888", fontSize: 11 }}>Imported</th>
             </tr>
@@ -421,13 +511,13 @@ export default function LeadsManager() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={9} style={{ padding: 40, textAlign: "center", color: "#999" }}>
+                <td colSpan={10} style={{ padding: 40, textAlign: "center", color: "#999" }}>
                   Loading leads...
                 </td>
               </tr>
             ) : filtered.length === 0 ? (
               <tr>
-                <td colSpan={9} style={{ padding: 40, textAlign: "center", color: "#999" }}>
+                <td colSpan={10} style={{ padding: 40, textAlign: "center", color: "#999" }}>
                   No leads yet -- upload a CSV or XLSX to get started
                 </td>
               </tr>
@@ -469,13 +559,18 @@ export default function LeadsManager() {
                       </span>
                     </td>
                     <td style={{ padding: "8px 12px", color: "#888", fontFamily: "'DM Mono', monospace", fontSize: 11 }}>
-                      Step {lead.sequenceStep || 0}
+                      Step {lead.sequence_step || lead.sequenceStep || 0}
+                    </td>
+                    <td style={{ padding: "8px 12px", color: "#999", fontSize: 11 }}>
+                      {lead.assigned_to
+                        ? (teamMembers.find((m) => m.id === lead.assigned_to)?.name || "--")
+                        : "--"}
                     </td>
                     <td style={{ padding: "8px 12px", color: "#999", fontSize: 11 }}>
                       {lead.source}
                     </td>
                     <td style={{ padding: "8px 12px", color: "#999", fontSize: 11 }}>
-                      {lead.importedAt ? new Date(lead.importedAt).toLocaleDateString() : "--"}
+                      {(lead.imported_at || lead.importedAt) ? new Date(lead.imported_at || lead.importedAt).toLocaleDateString() : "--"}
                     </td>
                   </tr>
                 );

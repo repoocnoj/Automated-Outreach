@@ -2,19 +2,24 @@ import express from "express";
 import cors from "cors";
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import multer from "multer";
+import pool from "./db.js";
+import { initDatabase } from "./db.js";
 import { generateAllDrafts, getDailyProgress } from "./draft-engine.js";
-import { sendApprovedEmails, sendEmail } from "./gmail-client.js";
-import { readLeads, addLeads, updateLeadStatus, writeLeads } from "./leads-store.js";
-import { getVoiceConfig, saveVoiceConfig, getEmailExamples, saveEmailExamples } from "./voice-store.js";
+import { readLeads, addLeads, updateLeadStatus, assignLeads, getLeadCounts } from "./leads-store.js";
+import { getVoiceConfig, saveVoiceConfig, getEmailExamples, saveEmailExample, deleteEmailExample } from "./voice-store.js";
 import { generateSequences, getProgress } from "./sequence-engine.js";
+import { loginUser, createUser, authMiddleware, adminMiddleware, getTeamMembers, seedAdminUser } from "./auth.js";
 
 dotenv.config();
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const app = express();
 const PORT = process.env.PORT || 3001;
-const DRAFTS_PATH = "./data/drafts-latest.json";
 
 app.use(cors());
 app.use(express.json());
@@ -27,145 +32,221 @@ if (!fs.existsSync("./data")) {
   fs.mkdirSync("./data", { recursive: true });
 }
 
+// Initialize database and seed admin on startup
+await initDatabase();
+await seedAdminUser();
+
 // ═══════════════════════════════════════════════════════════════
-// HELPER: Read/write drafts
+// HELPER: Draft CRUD via PostgreSQL
 // ═══════════════════════════════════════════════════════════════
 
-function readDrafts() {
-  if (!fs.existsSync(DRAFTS_PATH)) return [];
-  return JSON.parse(fs.readFileSync(DRAFTS_PATH, "utf-8"));
+async function readDrafts(filters = {}) {
+  let query = "SELECT * FROM drafts";
+  const conditions = [];
+  const params = [];
+
+  if (filters.status) {
+    params.push(filters.status);
+    conditions.push(`status = $${params.length}`);
+  }
+  if (filters.assignedTo) {
+    params.push(filters.assignedTo);
+    conditions.push(`assigned_to = $${params.length}`);
+  }
+
+  if (conditions.length > 0) {
+    query += " WHERE " + conditions.join(" AND ");
+  }
+
+  query += " ORDER BY created_at DESC";
+  const result = await pool.query(query, params);
+  return result.rows;
 }
 
-function writeDrafts(drafts) {
-  fs.writeFileSync(DRAFTS_PATH, JSON.stringify(drafts, null, 2));
+async function saveDraft(draft) {
+  await pool.query(
+    `INSERT INTO drafts (id, lead_id, type, category, recipient, recipient_title, recipient_email, subject, body, research_notes, status, sequence_step, total_steps, day, modality, scheduled_time, assigned_to, meta)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+     ON CONFLICT (id) DO UPDATE SET
+       subject = EXCLUDED.subject,
+       body = EXCLUDED.body,
+       status = EXCLUDED.status,
+       updated_at = NOW()`,
+    [
+      draft.id,
+      draft.leadId || null,
+      draft.type,
+      draft.category,
+      draft.recipient,
+      draft.recipientTitle || "",
+      draft.recipientEmail || "",
+      draft.subject || "",
+      draft.body || "",
+      draft.researchNotes || "",
+      draft.status || "pending",
+      draft.sequenceStep || null,
+      draft.totalSteps || null,
+      draft.day || null,
+      draft.modality || draft.type,
+      draft.scheduledTime || "",
+      draft.assignedTo || null,
+      JSON.stringify(draft.meta || {}),
+    ]
+  );
 }
+
+async function updateDraft(id, updates) {
+  const fields = [];
+  const params = [];
+  let paramIndex = 1;
+
+  const allowedFields = {
+    status: "status",
+    subject: "subject",
+    body: "body",
+    assigned_to: "assigned_to",
+  };
+
+  for (const [key, column] of Object.entries(allowedFields)) {
+    if (updates[key] !== undefined) {
+      fields.push(`${column} = $${paramIndex}`);
+      params.push(updates[key]);
+      paramIndex++;
+    }
+  }
+
+  if (fields.length === 0) return;
+
+  fields.push(`updated_at = NOW()`);
+  params.push(id);
+
+  await pool.query(
+    `UPDATE drafts SET ${fields.join(", ")} WHERE id = $${paramIndex}`,
+    params
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PUBLIC ROUTES (no auth required)
+// ═══════════════════════════════════════════════════════════════
+
+// POST /api/auth/login
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const result = await loginUser(email, password);
+    res.json(result);
+  } catch (err) {
+    res.status(401).json({ error: err.message });
+  }
+});
+
+// GET /api/health — Health check
+app.get("/api/health", (req, res) => {
+  res.json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// GET /api/sequences/progress — no auth required for polling simplicity
+app.get("/api/sequences/progress", (req, res) => {
+  res.json(getProgress());
+});
+
+// GET /api/progress — Daily draft generation progress
+app.get("/api/progress", (req, res) => {
+  res.json(getDailyProgress());
+});
+
+// ═══════════════════════════════════════════════════════════════
+// PROTECTED ROUTES (auth required)
+// ═══════════════════════════════════════════════════════════════
+
+// GET /api/auth/me — Get current user
+app.get("/api/auth/me", authMiddleware, (req, res) => {
+  res.json({ user: req.user });
+});
+
+// GET /api/team — Get all team members
+app.get("/api/team", authMiddleware, async (req, res) => {
+  const members = await getTeamMembers();
+  res.json({ members });
+});
+
+// POST /api/team/invite — Create a new team member (admin only)
+app.post("/api/team/invite", authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { email, name, password, role } = req.body;
+    const user = await createUser(email, name, password, role || "member");
+    res.json({ user });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
 
 // ═══════════════════════════════════════════════════════════════
 // DRAFT API ROUTES
 // ═══════════════════════════════════════════════════════════════
 
 // GET /api/drafts — Return all drafts
-app.get("/api/drafts", (req, res) => {
-  const drafts = readDrafts();
+app.get("/api/drafts", authMiddleware, async (req, res) => {
+  const filters = {
+    status: req.query.status,
+    assignedTo: req.query.assignedTo,
+  };
+  const drafts = await readDrafts(filters);
   res.json({ drafts, count: drafts.length });
 });
 
 // PATCH /api/drafts/:id — Update a draft (status, body, subject)
-app.patch("/api/drafts/:id", (req, res) => {
-  const drafts = readDrafts();
-  const idx = drafts.findIndex((d) => d.id === req.params.id);
-
-  if (idx === -1) {
-    return res.status(404).json({ error: "Draft not found" });
+app.patch("/api/drafts/:id", authMiddleware, async (req, res) => {
+  try {
+    await updateDraft(req.params.id, req.body);
+    const result = await pool.query("SELECT * FROM drafts WHERE id = $1", [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: "Draft not found" });
+    res.json({ draft: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-
-  const allowedFields = ["status", "body", "subject"];
-  for (const field of allowedFields) {
-    if (req.body[field] !== undefined) {
-      drafts[idx][field] = req.body[field];
-    }
-  }
-
-  drafts[idx].updatedAt = new Date().toISOString();
-  writeDrafts(drafts);
-  res.json({ draft: drafts[idx] });
 });
 
 // POST /api/drafts/:id/approve — Approve a single draft
-app.post("/api/drafts/:id/approve", (req, res) => {
-  const drafts = readDrafts();
-  const idx = drafts.findIndex((d) => d.id === req.params.id);
-
-  if (idx === -1) return res.status(404).json({ error: "Draft not found" });
-
-  drafts[idx].status = "approved";
-  drafts[idx].updatedAt = new Date().toISOString();
-  writeDrafts(drafts);
-  res.json({ draft: drafts[idx] });
+app.post("/api/drafts/:id/approve", authMiddleware, async (req, res) => {
+  await pool.query("UPDATE drafts SET status = 'approved', updated_at = NOW() WHERE id = $1", [req.params.id]);
+  const result = await pool.query("SELECT * FROM drafts WHERE id = $1", [req.params.id]);
+  if (result.rows.length === 0) return res.status(404).json({ error: "Draft not found" });
+  res.json({ draft: result.rows[0] });
 });
 
 // POST /api/drafts/:id/delete — Soft-delete a draft
-app.post("/api/drafts/:id/delete", (req, res) => {
-  const drafts = readDrafts();
-  const idx = drafts.findIndex((d) => d.id === req.params.id);
-
-  if (idx === -1) return res.status(404).json({ error: "Draft not found" });
-
-  drafts[idx].status = "deleted";
-  drafts[idx].updatedAt = new Date().toISOString();
-  writeDrafts(drafts);
-  res.json({ draft: drafts[idx] });
+app.post("/api/drafts/:id/delete", authMiddleware, async (req, res) => {
+  await pool.query("UPDATE drafts SET status = 'deleted', updated_at = NOW() WHERE id = $1", [req.params.id]);
+  const result = await pool.query("SELECT * FROM drafts WHERE id = $1", [req.params.id]);
+  if (result.rows.length === 0) return res.status(404).json({ error: "Draft not found" });
+  res.json({ draft: result.rows[0] });
 });
 
 // POST /api/drafts/:id/restore — Restore a deleted draft
-app.post("/api/drafts/:id/restore", (req, res) => {
-  const drafts = readDrafts();
-  const idx = drafts.findIndex((d) => d.id === req.params.id);
-
-  if (idx === -1) return res.status(404).json({ error: "Draft not found" });
-
-  drafts[idx].status = "pending";
-  drafts[idx].updatedAt = new Date().toISOString();
-  writeDrafts(drafts);
-  res.json({ draft: drafts[idx] });
+app.post("/api/drafts/:id/restore", authMiddleware, async (req, res) => {
+  await pool.query("UPDATE drafts SET status = 'pending', updated_at = NOW() WHERE id = $1", [req.params.id]);
+  const result = await pool.query("SELECT * FROM drafts WHERE id = $1", [req.params.id]);
+  if (result.rows.length === 0) return res.status(404).json({ error: "Draft not found" });
+  res.json({ draft: result.rows[0] });
 });
 
 // POST /api/approve-all — Approve all pending drafts
-app.post("/api/approve-all", (req, res) => {
-  const drafts = readDrafts();
-  let count = 0;
-
-  drafts.forEach((d) => {
-    if (d.status === "pending") {
-      d.status = "approved";
-      d.updatedAt = new Date().toISOString();
-      count++;
-    }
-  });
-
-  writeDrafts(drafts);
-  res.json({ approved: count });
-});
-
-// POST /api/send-all — Send all approved emails via Gmail
-app.post("/api/send-all", async (req, res) => {
-  try {
-    const result = await sendApprovedEmails();
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// POST /api/send/:id — Send a single approved email
-app.post("/api/send/:id", async (req, res) => {
-  const drafts = readDrafts();
-  const draft = drafts.find((d) => d.id === req.params.id);
-
-  if (!draft) return res.status(404).json({ error: "Draft not found" });
-  if (draft.type !== "email")
-    return res.status(400).json({ error: "Can only send emails" });
-  if (!draft.recipientEmail)
-    return res.status(400).json({ error: "No recipient email" });
-  if (draft.status !== "approved" && draft.status !== "edited")
-    return res.status(400).json({ error: "Draft must be approved first" });
-
-  try {
-    await sendEmail(draft.recipientEmail, draft.subject, draft.body);
-    draft.status = "sent";
-    draft.sentAt = new Date().toISOString();
-    writeDrafts(drafts);
-    res.json({ draft });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+app.post("/api/approve-all", authMiddleware, async (req, res) => {
+  const result = await pool.query(
+    "UPDATE drafts SET status = 'approved', updated_at = NOW() WHERE status = 'pending'"
+  );
+  res.json({ approved: result.rowCount });
 });
 
 // POST /api/generate — Trigger draft generation manually
-app.post("/api/generate", async (req, res) => {
+app.post("/api/generate", authMiddleware, async (req, res) => {
   try {
     res.json({ message: "Draft generation started. This takes 3-5 minutes." });
-    // Run in background
     generateAllDrafts().catch((err) =>
       console.error("Draft generation failed:", err)
     );
@@ -174,45 +255,24 @@ app.post("/api/generate", async (req, res) => {
   }
 });
 
-// GET /api/progress — Daily draft generation progress
-app.get("/api/progress", (req, res) => {
-  res.json(getDailyProgress());
-});
-
-// GET /api/health — Health check
-app.get("/api/health", (req, res) => {
-  res.json({
-    status: "ok",
-    hasDrafts: fs.existsSync(DRAFTS_PATH),
-    draftCount: readDrafts().length,
-    timestamp: new Date().toISOString(),
-  });
-});
-
 // ═══════════════════════════════════════════════════════════════
 // LEADS API ROUTES
 // ═══════════════════════════════════════════════════════════════
 
 // GET /api/leads — Return all leads with optional filters
-app.get("/api/leads", (req, res) => {
-  const leads = readLeads();
-  const status = req.query.status;
-  const filtered = status ? leads.filter((l) => l.status === status) : leads;
-  res.json({
-    leads: filtered,
-    total: leads.length,
-    counts: {
-      not_contacted: leads.filter((l) => l.status === "not_contacted").length,
-      drafted: leads.filter((l) => l.status === "drafted").length,
-      approved: leads.filter((l) => l.status === "approved").length,
-      sent: leads.filter((l) => l.status === "sent").length,
-      replied: leads.filter((l) => l.status === "replied").length,
-    },
-  });
+app.get("/api/leads", authMiddleware, async (req, res) => {
+  const filters = {
+    status: req.query.status,
+    assignedTo: req.query.assignedTo,
+    search: req.query.search,
+  };
+  const leads = await readLeads(filters);
+  const counts = await getLeadCounts();
+  res.json({ leads, counts });
 });
 
 // POST /api/leads/upload — Upload CSV or XLSX file of leads
-app.post("/api/leads/upload", upload.single("file"), async (req, res) => {
+app.post("/api/leads/upload", authMiddleware, upload.single("file"), async (req, res) => {
   try {
     const file = req.file;
     if (!file) return res.status(400).json({ error: "No file uploaded" });
@@ -251,38 +311,56 @@ app.post("/api/leads/upload", upload.single("file"), async (req, res) => {
 
     fs.unlinkSync(file.path);
 
-    const result = addLeads(leads, file.originalname);
+    const result = await addLeads(leads, file.originalname);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// PATCH /api/leads/:id — Update a lead
-app.patch("/api/leads/:id", (req, res) => {
-  const leads = readLeads();
-  const idx = leads.findIndex((l) => l.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: "Lead not found" });
+// POST /api/leads/assign — Assign leads to a team member
+app.post("/api/leads/assign", authMiddleware, async (req, res) => {
+  const { leadIds, userId } = req.body;
+  if (!leadIds || !userId) return res.status(400).json({ error: "leadIds and userId required" });
 
-  const allowedFields = ["status", "notes", "painSignal", "sequenceStep"];
+  await assignLeads(leadIds, userId);
+  res.json({ assigned: leadIds.length, userId });
+});
+
+// PATCH /api/leads/:id — Update a lead
+app.patch("/api/leads/:id", authMiddleware, async (req, res) => {
+  const allowedFields = ["status", "notes", "pain_signal", "sequence_step"];
+  const fields = [];
+  const params = [];
+  let i = 1;
+
   for (const field of allowedFields) {
-    if (req.body[field] !== undefined) leads[idx][field] = req.body[field];
+    if (req.body[field] !== undefined) {
+      fields.push(`${field} = $${i}`);
+      params.push(req.body[field]);
+      i++;
+    }
   }
-  writeLeads(leads);
-  res.json({ lead: leads[idx] });
+
+  if (fields.length === 0) return res.status(400).json({ error: "No valid fields to update" });
+
+  params.push(req.params.id);
+  await pool.query(`UPDATE leads SET ${fields.join(", ")} WHERE id = $${i}`, params);
+
+  const result = await pool.query("SELECT * FROM leads WHERE id = $1", [req.params.id]);
+  if (result.rows.length === 0) return res.status(404).json({ error: "Lead not found" });
+  res.json({ lead: result.rows[0] });
 });
 
 // DELETE /api/leads/:id — Remove a lead
-app.delete("/api/leads/:id", (req, res) => {
-  let leads = readLeads();
-  leads = leads.filter((l) => l.id !== req.params.id);
-  writeLeads(leads);
+app.delete("/api/leads/:id", authMiddleware, async (req, res) => {
+  await pool.query("DELETE FROM leads WHERE id = $1", [req.params.id]);
   res.json({ success: true });
 });
 
 // DELETE /api/leads — Clear all leads
-app.delete("/api/leads", (req, res) => {
-  writeLeads([]);
+app.delete("/api/leads", authMiddleware, async (req, res) => {
+  await pool.query("DELETE FROM leads");
   res.json({ success: true });
 });
 
@@ -291,21 +369,20 @@ app.delete("/api/leads", (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 
 // GET /api/voice — Get current voice config
-app.get("/api/voice", (req, res) => {
-  res.json({
-    config: getVoiceConfig(),
-    examples: getEmailExamples(),
-  });
+app.get("/api/voice", authMiddleware, async (req, res) => {
+  const config = await getVoiceConfig();
+  const examples = await getEmailExamples();
+  res.json({ config, examples });
 });
 
 // PUT /api/voice — Update voice config
-app.put("/api/voice", (req, res) => {
-  saveVoiceConfig(req.body);
+app.put("/api/voice", authMiddleware, async (req, res) => {
+  await saveVoiceConfig(req.body);
   res.json({ success: true });
 });
 
 // POST /api/voice/examples/upload — Upload example emails (CSV or XLSX)
-app.post("/api/voice/examples/upload", upload.single("file"), async (req, res) => {
+app.post("/api/voice/examples/upload", authMiddleware, upload.single("file"), async (req, res) => {
   try {
     const file = req.file;
     if (!file) return res.status(400).json({ error: "No file uploaded" });
@@ -334,41 +411,39 @@ app.post("/api/voice/examples/upload", upload.single("file"), async (req, res) =
 
     fs.unlinkSync(file.path);
 
-    const existing = getEmailExamples();
-    const merged = [...existing, ...examples.map((ex) => ({
-      id: `ex-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      subject: ex.subject || ex.Subject || "",
-      body: ex.body || ex.Body || ex.content || ex.Content || ex.message || ex.Message || "",
-      recipient: ex.recipient || ex.Recipient || ex.to || ex.To || "",
-      category: ex.category || ex.Category || ex.type || ex.Type || "general",
-      performance: ex.performance || ex.Performance || ex.result || ex.Result || "",
-      addedAt: new Date().toISOString(),
-    }))];
+    let addedCount = 0;
+    for (const ex of examples) {
+      await saveEmailExample({
+        id: `ex-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        subject: ex.subject || ex.Subject || "",
+        body: ex.body || ex.Body || ex.content || ex.Content || ex.message || ex.Message || "",
+        recipient: ex.recipient || ex.Recipient || ex.to || ex.To || "",
+        category: ex.category || ex.Category || ex.type || ex.Type || "general",
+        performance: ex.performance || ex.Performance || ex.result || ex.Result || "",
+      });
+      addedCount++;
+    }
 
-    saveEmailExamples(merged);
-    res.json({ added: examples.length, total: merged.length });
+    const allExamples = await getEmailExamples();
+    res.json({ added: addedCount, total: allExamples.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // POST /api/voice/examples — Add a single example manually
-app.post("/api/voice/examples", (req, res) => {
-  const examples = getEmailExamples();
-  examples.push({
+app.post("/api/voice/examples", authMiddleware, async (req, res) => {
+  await saveEmailExample({
     id: `ex-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     ...req.body,
-    addedAt: new Date().toISOString(),
   });
-  saveEmailExamples(examples);
+  const examples = await getEmailExamples();
   res.json({ total: examples.length });
 });
 
 // DELETE /api/voice/examples/:id — Remove an example
-app.delete("/api/voice/examples/:id", (req, res) => {
-  let examples = getEmailExamples();
-  examples = examples.filter((e) => e.id !== req.params.id);
-  saveEmailExamples(examples);
+app.delete("/api/voice/examples/:id", authMiddleware, async (req, res) => {
+  await deleteEmailExample(req.params.id);
   res.json({ success: true });
 });
 
@@ -377,14 +452,14 @@ app.delete("/api/voice/examples/:id", (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 
 // POST /api/sequences/generate — Generate sequences for selected leads
-app.post("/api/sequences/generate", async (req, res) => {
+app.post("/api/sequences/generate", authMiddleware, async (req, res) => {
   const { leadIds, sequenceConfig, sequenceContext } = req.body;
 
   if (!leadIds || leadIds.length === 0) {
     return res.status(400).json({ error: "No leads selected" });
   }
 
-  const allLeads = readLeads();
+  const allLeads = await readLeads();
   const selectedLeads = allLeads.filter((l) => leadIds.includes(l.id));
 
   if (selectedLeads.length === 0) {
@@ -403,19 +478,13 @@ app.post("/api/sequences/generate", async (req, res) => {
   try {
     const drafts = await generateSequences(selectedLeads, sequenceConfig, sequenceContext);
 
-    const existingDrafts = fs.existsSync("./data/drafts-latest.json")
-      ? JSON.parse(fs.readFileSync("./data/drafts-latest.json", "utf-8"))
-      : [];
-    const merged = [...existingDrafts, ...drafts];
-    fs.writeFileSync("./data/drafts-latest.json", JSON.stringify(merged, null, 2));
+    // Save each draft to PostgreSQL
+    for (const draft of drafts) {
+      await saveDraft(draft);
+    }
   } catch (err) {
     console.error("Sequence generation failed:", err);
   }
-});
-
-// GET /api/sequences/progress — Get current generation progress
-app.get("/api/sequences/progress", (req, res) => {
-  res.json(getProgress());
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -423,8 +492,8 @@ app.get("/api/sequences/progress", (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 
 // GET /api/export/csv — Export drafts as CSV for Instantly
-app.get("/api/export/csv", (req, res) => {
-  const drafts = readDrafts();
+app.get("/api/export/csv", authMiddleware, async (req, res) => {
+  const drafts = await readDrafts();
   const status = req.query.status;
   const filtered = status
     ? drafts.filter((d) => d.status === status)
@@ -450,18 +519,18 @@ app.get("/api/export/csv", (req, res) => {
     const names = (d.recipient || "").split(" ");
     const firstName = names[0] || "";
     const lastName = names.slice(1).join(" ") || "";
-    const titleCompany = (d.recipientTitle || "").split(",");
+    const titleCompany = (d.recipient_title || "").split(",");
 
     return [
-      d.recipientEmail || "",
+      d.recipient_email || "",
       firstName,
       lastName,
-      (titleCompany[1] || d.meta?.company || "").trim(),
+      (titleCompany[1] || "").trim(),
       (titleCompany[0] || "").trim(),
       (d.subject || "").replace(/"/g, '""'),
       (d.body || "").replace(/"/g, '""').replace(/\n/g, "\\n"),
-      d.sequenceStep || 1,
-      d.totalSteps || 1,
+      d.sequence_step || 1,
+      d.total_steps || 1,
       d.type || d.modality || "email",
       d.day || 0,
       d.status || "pending",
@@ -487,10 +556,14 @@ app.get("/api/export/csv", (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 
 if (process.env.NODE_ENV === "production") {
-  const clientDist = path.join(process.cwd(), "client", "dist");
+  const clientDist = path.join(__dirname, "..", "client", "dist");
   app.use(express.static(clientDist));
+
+  // SPA fallback — serve index.html for all non-API routes
   app.get("*", (req, res) => {
-    res.sendFile(path.join(clientDist, "index.html"));
+    if (!req.path.startsWith("/api")) {
+      res.sendFile(path.join(clientDist, "index.html"));
+    }
   });
 }
 

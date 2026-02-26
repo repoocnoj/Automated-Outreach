@@ -2,12 +2,13 @@ node_modules/
 .env
 *.json
 !package.json
+!package-lock.json
 !*-sample.json
 !vite.config.js
 !tsconfig.json
+!railway.json
 data/drafts-*.json
-gmail-token.json
-google-service-account.json
-gmail-credentials.json
+data/
 dist/
+client/dist/
 .DS_Store

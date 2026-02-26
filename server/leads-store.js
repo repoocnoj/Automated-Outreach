@@ -1,83 +1,108 @@
-import fs from "fs";
+import pool from "./db.js";
 
-const LEADS_PATH = "./data/leads.json";
+export async function readLeads(filters = {}) {
+  let query = "SELECT * FROM leads";
+  const conditions = [];
+  const params = [];
 
-// Lead object shape:
-// {
-//   id: string,
-//   name: string,
-//   email: string,
-//   title: string,
-//   company: string,
-//   companySize: string,
-//   industry: string,
-//   linkedinUrl: string,
-//   painSignal: string,
-//   notes: string,
-//   status: "not_contacted" | "drafted" | "approved" | "sent" | "replied",
-//   importedAt: ISO date string,
-//   lastDraftedAt: ISO date string or null,
-//   lastSentAt: ISO date string or null,
-//   sequenceStep: number (0 = not started),
-//   source: string (filename of the CSV/XLSX they came from)
-// }
+  if (filters.status) {
+    params.push(filters.status);
+    conditions.push(`status = $${params.length}`);
+  }
+  if (filters.assignedTo) {
+    params.push(filters.assignedTo);
+    conditions.push(`assigned_to = $${params.length}`);
+  }
+  if (filters.search) {
+    params.push(`%${filters.search}%`);
+    conditions.push(`(name ILIKE $${params.length} OR company ILIKE $${params.length} OR email ILIKE $${params.length})`);
+  }
 
-export function readLeads() {
-  if (!fs.existsSync(LEADS_PATH)) return [];
-  return JSON.parse(fs.readFileSync(LEADS_PATH, "utf-8"));
+  if (conditions.length > 0) {
+    query += " WHERE " + conditions.join(" AND ");
+  }
+
+  query += " ORDER BY imported_at DESC";
+
+  const result = await pool.query(query, params);
+  return result.rows;
 }
 
-export function writeLeads(leads) {
-  if (!fs.existsSync("./data")) fs.mkdirSync("./data", { recursive: true });
-  fs.writeFileSync(LEADS_PATH, JSON.stringify(leads, null, 2));
+export async function addLeads(newLeads, source) {
+  let added = 0;
+  let duplicates = 0;
+
+  for (const l of newLeads) {
+    const email = (l.email || "").toLowerCase().trim();
+    if (!email) continue;
+
+    try {
+      await pool.query(
+        `INSERT INTO leads (id, name, email, title, company, company_size, industry, linkedin_url, pain_signal, notes, status, source)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'not_contacted', $11)
+         ON CONFLICT (email) DO NOTHING`,
+        [
+          `lead-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          l.name || "",
+          email,
+          l.title || l.jobTitle || l.jobtitle || "",
+          l.company || l.companyName || "",
+          l.companySize || l.employees || l.size || "",
+          l.industry || l.sector || "",
+          l.linkedinUrl || l.linkedin || "",
+          l.painSignal || l.signal || l.reason || "",
+          l.notes || "",
+          source || "manual",
+        ]
+      );
+      added++;
+    } catch (err) {
+      if (err.code === "23505") {
+        duplicates++;
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  const totalResult = await pool.query("SELECT COUNT(*) FROM leads");
+  const total = parseInt(totalResult.rows[0].count);
+
+  return { added, duplicates, total };
 }
 
-export function addLeads(newLeads, source) {
-  const existing = readLeads();
-  const existingEmails = new Set(existing.map((l) => l.email.toLowerCase()));
+export async function updateLeadStatus(id, status) {
+  const updates = { status };
+  if (status === "drafted") updates.last_drafted_at = new Date().toISOString();
+  if (status === "sent") updates.last_sent_at = new Date().toISOString();
 
-  const toAdd = newLeads
-    .filter((l) => l.email && !existingEmails.has(l.email.toLowerCase()))
-    .map((l) => ({
-      id: `lead-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      name: l.name || "",
-      email: l.email || "",
-      title: l.title || l.jobTitle || l.jobtitle || "",
-      company: l.company || l.companyName || "",
-      companySize: l.companySize || l.employees || l.size || "",
-      industry: l.industry || l.sector || "",
-      linkedinUrl: l.linkedinUrl || l.linkedin || "",
-      painSignal: l.painSignal || l.signal || l.reason || "",
-      notes: l.notes || "",
-      status: "not_contacted",
-      importedAt: new Date().toISOString(),
-      lastDraftedAt: null,
-      lastSentAt: null,
-      sequenceStep: 0,
-      source: source || "manual",
-    }));
-
-  const merged = [...existing, ...toAdd];
-  writeLeads(merged);
-  return { added: toAdd.length, duplicates: newLeads.length - toAdd.length, total: merged.length };
+  await pool.query(
+    "UPDATE leads SET status = $1, last_drafted_at = COALESCE($2, last_drafted_at), last_sent_at = COALESCE($3, last_sent_at) WHERE id = $4",
+    [status, updates.last_drafted_at || null, updates.last_sent_at || null, id]
+  );
 }
 
-export function updateLeadStatus(id, status) {
-  const leads = readLeads();
-  const idx = leads.findIndex((l) => l.id === id);
-  if (idx === -1) return null;
-  leads[idx].status = status;
-  if (status === "drafted") leads[idx].lastDraftedAt = new Date().toISOString();
-  if (status === "sent") leads[idx].lastSentAt = new Date().toISOString();
-  writeLeads(leads);
-  return leads[idx];
+export async function updateLeadSequenceStep(id, step) {
+  await pool.query("UPDATE leads SET sequence_step = $1 WHERE id = $2", [step, id]);
 }
 
-export function updateLeadSequenceStep(id, step) {
-  const leads = readLeads();
-  const idx = leads.findIndex((l) => l.id === id);
-  if (idx === -1) return null;
-  leads[idx].sequenceStep = step;
-  writeLeads(leads);
-  return leads[idx];
+export async function assignLeads(leadIds, userId) {
+  await pool.query(
+    "UPDATE leads SET assigned_to = $1 WHERE id = ANY($2::varchar[])",
+    [userId, leadIds]
+  );
+}
+
+export async function getLeadCounts() {
+  const result = await pool.query(`
+    SELECT
+      COUNT(*) as total,
+      COUNT(*) FILTER (WHERE status = 'not_contacted') as not_contacted,
+      COUNT(*) FILTER (WHERE status = 'drafted') as drafted,
+      COUNT(*) FILTER (WHERE status = 'approved') as approved,
+      COUNT(*) FILTER (WHERE status = 'sent') as sent,
+      COUNT(*) FILTER (WHERE status = 'replied') as replied
+    FROM leads
+  `);
+  return result.rows[0];
 }

@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { useAuth } from "../context/AuthContext.jsx";
 
 const API = "/api";
 
@@ -35,6 +36,7 @@ const MODALITY_COLORS = {
 };
 
 export default function SequenceBuilder({ selectedLeads, onClose, onStarted }) {
+  const { apiFetch } = useAuth();
   const [config, setConfig] = useState({
     emails: 5,
     linkedinMessages: 2,
@@ -50,9 +52,8 @@ export default function SequenceBuilder({ selectedLeads, onClose, onStarted }) {
   const handleGenerate = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API}/sequences/generate`, {
+      const res = await apiFetch(`${API}/sequences/generate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           leadIds: selectedLeads.map((l) => l.id),
           sequenceConfig: config,

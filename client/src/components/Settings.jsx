@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from "react";
+import { useAuth } from "../context/AuthContext.jsx";
 
 const API = "/api";
 
 export default function Settings() {
+  const { apiFetch } = useAuth();
   const [config, setConfig] = useState({ customInstructions: "", useCustom: false });
   const [examples, setExamples] = useState([]);
   const [saved, setSaved] = useState(false);
@@ -17,7 +19,7 @@ export default function Settings() {
 
   const fetchVoice = async () => {
     try {
-      const res = await fetch(`${API}/voice`);
+      const res = await apiFetch(`${API}/voice`);
       const data = await res.json();
       setConfig(data.config || { customInstructions: "", useCustom: false });
       setExamples(data.examples || []);
@@ -28,9 +30,8 @@ export default function Settings() {
 
   const saveConfig = async () => {
     try {
-      await fetch(`${API}/voice`, {
+      await apiFetch(`${API}/voice`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(config),
       });
       setSaved(true);
@@ -46,7 +47,7 @@ export default function Settings() {
     const formData = new FormData();
     formData.append("file", file);
     try {
-      const res = await fetch(`${API}/voice/examples/upload`, {
+      const res = await apiFetch(`${API}/voice/examples/upload`, {
         method: "POST",
         body: formData,
       });
@@ -62,9 +63,8 @@ export default function Settings() {
 
   const addExample = async () => {
     try {
-      await fetch(`${API}/voice/examples`, {
+      await apiFetch(`${API}/voice/examples`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(newExample),
       });
       setNewExample({ subject: "", body: "", category: "", performance: "" });
@@ -77,7 +77,7 @@ export default function Settings() {
 
   const deleteExample = async (id) => {
     try {
-      await fetch(`${API}/voice/examples/${id}`, { method: "DELETE" });
+      await apiFetch(`${API}/voice/examples/${id}`, { method: "DELETE" });
       fetchVoice();
     } catch (err) {
       console.error("Failed to delete example:", err);

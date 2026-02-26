@@ -1,18 +1,19 @@
 import React, { useState, useEffect, useCallback } from "react";
+import { useAuth } from "../context/AuthContext.jsx";
 import Header from "./Header.jsx";
 import FilterBar from "./FilterBar.jsx";
 import MessageCard from "./MessageCard.jsx";
 import MessageDetail from "./MessageDetail.jsx";
-import ProgressIndicator from "./ProgressIndicator.jsx";
+import ProgressOverlay from "./ProgressOverlay.jsx";
 
 const API = "/api";
 
 export default function Dashboard() {
+  const { apiFetch } = useAuth();
   const [messages, setMessages] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [filter, setFilter] = useState("all");
   const [toast, setToast] = useState(null);
-  const [sendingAll, setSendingAll] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showDailyProgress, setShowDailyProgress] = useState(false);
@@ -20,7 +21,7 @@ export default function Dashboard() {
   // ── Fetch drafts from API ──────────────────────────────────
   const fetchDrafts = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/drafts`);
+      const res = await apiFetch(`${API}/drafts`);
       const data = await res.json();
       setMessages(data.drafts || []);
     } catch (err) {
@@ -28,11 +29,10 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [apiFetch]);
 
   useEffect(() => {
     fetchDrafts();
-    // Poll every 10 seconds for updates
     const interval = setInterval(fetchDrafts, 10000);
     return () => clearInterval(interval);
   }, [fetchDrafts]);
@@ -45,18 +45,16 @@ export default function Dashboard() {
 
   // ── API helpers ────────────────────────────────────────────
   const apiPost = async (url, body) => {
-    const res = await fetch(url, {
+    const res = await apiFetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: body ? JSON.stringify(body) : undefined,
     });
     return res.json();
   };
 
   const apiPatch = async (url, body) => {
-    const res = await fetch(url, {
+    const res = await apiFetch(url, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
     return res.json();
@@ -94,26 +92,12 @@ export default function Dashboard() {
     showToast(`${result.approved} messages approved`);
   };
 
-  const handleSendAll = async () => {
-    setSendingAll(true);
-    try {
-      const result = await apiPost(`${API}/send-all`);
-      await fetchDrafts();
-      showToast(`${result.sent} emails sent!`);
-    } catch (err) {
-      showToast("Send failed: " + err.message, "error");
-    } finally {
-      setSendingAll(false);
-    }
-  };
-
   const handleGenerate = async () => {
     setGenerating(true);
     setShowDailyProgress(true);
     try {
       await apiPost(`${API}/generate`);
       showToast("Draft generation started");
-      // Poll more frequently while generating
       setTimeout(fetchDrafts, 30000);
       setTimeout(fetchDrafts, 60000);
       setTimeout(fetchDrafts, 120000);
@@ -129,7 +113,7 @@ export default function Dashboard() {
     const url = statusFilter
       ? `${API}/export/csv?status=${statusFilter}`
       : `${API}/export/csv`;
-    const response = await fetch(url);
+    const response = await apiFetch(url);
     const blob = await response.blob();
     const downloadUrl = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -189,20 +173,19 @@ export default function Dashboard() {
       <Header
         counts={counts}
         onApproveAll={handleApproveAll}
-        onSendAll={handleSendAll}
         onGenerate={handleGenerate}
         onExport={handleExport}
-        sendingAll={sendingAll}
         generating={generating}
       />
 
       {showDailyProgress && (
-        <ProgressIndicator
+        <ProgressOverlay
           type="daily"
           onComplete={() => {
             setShowDailyProgress(false);
             fetchDrafts();
           }}
+          onExport={() => handleExport()}
         />
       )}
 

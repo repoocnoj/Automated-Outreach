@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import dotenv from "dotenv";
+import pool from "./db.js";
 import { buildSequenceSteps } from "./sequence-builder.js";
 import {
   VOICE_PROFILE,
@@ -59,9 +60,27 @@ function logProgress(message) {
   console.log(`   ${message}`);
 }
 
+async function saveDraftToDb(draft) {
+  await pool.query(
+    `INSERT INTO drafts (id, lead_id, type, category, recipient, recipient_title, recipient_email, subject, body, research_notes, status, sequence_step, total_steps, day, modality, scheduled_time, assigned_to, meta)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+     ON CONFLICT (id) DO UPDATE SET
+       subject = EXCLUDED.subject, body = EXCLUDED.body, status = EXCLUDED.status, updated_at = NOW()`,
+    [
+      draft.id, draft.leadId || null, draft.type, draft.category,
+      draft.recipient, draft.recipientTitle || "", draft.recipientEmail || "",
+      draft.subject || "", draft.body || "", draft.researchNotes || "",
+      draft.status || "pending", draft.sequenceStep || null,
+      draft.totalSteps || null, draft.day || null,
+      draft.modality || draft.type, draft.scheduledTime || "",
+      draft.assignedTo || null, JSON.stringify(draft.meta || {}),
+    ]
+  );
+}
+
 async function buildSystemPrompt() {
-  const config = getVoiceConfig();
-  const examples = getEmailExamples();
+  const config = await getVoiceConfig();
+  const examples = await getEmailExamples();
 
   let prompt = VOICE_PROFILE;
 
@@ -113,25 +132,38 @@ async function callClaude(userPrompt, useWebSearch = false) {
 async function generateSequenceForLead(lead, steps, sequenceContext) {
   const completedSteps = [];
 
+  // Normalize lead fields (PostgreSQL rows use snake_case)
+  const leadData = {
+    id: lead.id,
+    name: lead.name || "",
+    title: lead.title || "",
+    company: lead.company || "",
+    companySize: lead.company_size || lead.companySize || "",
+    industry: lead.industry || "",
+    painSignal: lead.pain_signal || lead.painSignal || "",
+    notes: lead.notes || "",
+    email: lead.email || "",
+  };
+
   for (const step of steps) {
     updateProgress({
       currentStep: step.label,
       completedSteps: step.stepNumber - 1,
     });
-    logProgress(`${lead.name}: Drafting ${step.label}...`);
+    logProgress(`${leadData.name}: Drafting ${step.label}...`);
 
     let prompt;
     let result;
-    const useSearch = step.stepNumber === 1; // Only search on first touch
+    const useSearch = step.stepNumber === 1;
 
     if (step.modality === "email") {
-      prompt = SEQUENCE_EMAIL_PROMPT(lead, step.stepNumber, steps.length, completedSteps, sequenceContext);
+      prompt = SEQUENCE_EMAIL_PROMPT(leadData, step.stepNumber, steps.length, completedSteps, sequenceContext);
       result = await callClaude(prompt, useSearch);
     } else if (step.modality === "linkedin") {
-      prompt = SEQUENCE_LINKEDIN_PROMPT(lead, step.stepNumber, steps.length, completedSteps);
+      prompt = SEQUENCE_LINKEDIN_PROMPT(leadData, step.stepNumber, steps.length, completedSteps);
       result = await callClaude(prompt, false);
     } else if (step.modality === "text") {
-      prompt = SEQUENCE_TEXT_PROMPT(lead, step.stepNumber, steps.length, completedSteps);
+      prompt = SEQUENCE_TEXT_PROMPT(leadData, step.stepNumber, steps.length, completedSteps);
       result = await callClaude(prompt, false);
     }
 
@@ -140,9 +172,9 @@ async function generateSequenceForLead(lead, steps, sequenceContext) {
       leadId: lead.id,
       type: step.modality,
       category: "Sequence",
-      recipient: lead.name,
-      recipientTitle: `${lead.title}, ${lead.company}`,
-      recipientEmail: lead.email,
+      recipient: leadData.name,
+      recipientTitle: `${leadData.title}, ${leadData.company}`,
+      recipientEmail: leadData.email,
       subject: result.subject || "",
       body: result.body || result.comment || "",
       researchNotes: result.researchNotes || "",
@@ -152,11 +184,14 @@ async function generateSequenceForLead(lead, steps, sequenceContext) {
       day: step.day,
       modality: step.modality,
       scheduledTime: `Day ${step.day}`,
+      assignedTo: lead.assigned_to || null,
       meta: {
         sequenceConfig: { step: step.stepNumber, total: steps.length, day: step.day },
         generatedAt: new Date().toISOString(),
       },
     };
+
+    await saveDraftToDb(draft);
 
     completedSteps.push({
       stepNumber: step.stepNumber,
@@ -165,19 +200,16 @@ async function generateSequenceForLead(lead, steps, sequenceContext) {
       body: draft.body,
     });
 
-    logProgress(`✓ ${lead.name}: ${step.label} — "${draft.subject || draft.body.substring(0, 40)}..."`);
+    logProgress(`✓ ${leadData.name}: ${step.label} — "${draft.subject || draft.body.substring(0, 40)}..."`);
 
-    // Rate limiting
     await new Promise((r) => setTimeout(r, 1000));
 
-    // Yield the draft
     step.draft = draft;
   }
 
-  // Update lead status
   if (lead.id) {
-    updateLeadStatus(lead.id, "drafted");
-    updateLeadSequenceStep(lead.id, steps.length);
+    await updateLeadStatus(lead.id, "drafted");
+    await updateLeadSequenceStep(lead.id, steps.length);
   }
 
   return steps.map((s) => s.draft);

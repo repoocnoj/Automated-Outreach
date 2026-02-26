@@ -1,32 +1,42 @@
-import fs from "fs";
+import pool from "./db.js";
 
-const VOICE_PATH = "./data/voice-config.json";
-const EXAMPLES_PATH = "./data/email-examples.json";
-
-// Default voice config uses the existing VOICE_PROFILE from voice-profile.js
-// but allows user overrides
-
-export function getVoiceConfig() {
-  if (!fs.existsSync(VOICE_PATH)) {
-    return {
-      customInstructions: "",
-      useCustom: false,
-    };
+export async function getVoiceConfig() {
+  const result = await pool.query("SELECT * FROM voice_config WHERE id = 1");
+  if (result.rows.length === 0) {
+    return { customInstructions: "", useCustom: false };
   }
-  return JSON.parse(fs.readFileSync(VOICE_PATH, "utf-8"));
+  return {
+    customInstructions: result.rows[0].custom_instructions,
+    useCustom: result.rows[0].use_custom,
+  };
 }
 
-export function saveVoiceConfig(config) {
-  if (!fs.existsSync("./data")) fs.mkdirSync("./data", { recursive: true });
-  fs.writeFileSync(VOICE_PATH, JSON.stringify(config, null, 2));
+export async function saveVoiceConfig(config) {
+  await pool.query(
+    "UPDATE voice_config SET custom_instructions = $1, use_custom = $2, updated_at = NOW() WHERE id = 1",
+    [config.customInstructions || "", config.useCustom || false]
+  );
 }
 
-export function getEmailExamples() {
-  if (!fs.existsSync(EXAMPLES_PATH)) return [];
-  return JSON.parse(fs.readFileSync(EXAMPLES_PATH, "utf-8"));
+export async function getEmailExamples() {
+  const result = await pool.query("SELECT * FROM email_examples ORDER BY added_at DESC");
+  return result.rows;
 }
 
-export function saveEmailExamples(examples) {
-  if (!fs.existsSync("./data")) fs.mkdirSync("./data", { recursive: true });
-  fs.writeFileSync(EXAMPLES_PATH, JSON.stringify(examples, null, 2));
+export async function saveEmailExample(example) {
+  await pool.query(
+    "INSERT INTO email_examples (id, subject, body, recipient, category, performance) VALUES ($1, $2, $3, $4, $5, $6)",
+    [
+      example.id || `ex-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      example.subject || "",
+      example.body || "",
+      example.recipient || "",
+      example.category || "general",
+      example.performance || "",
+    ]
+  );
+}
+
+export async function deleteEmailExample(id) {
+  await pool.query("DELETE FROM email_examples WHERE id = $1", [id]);
 }

@@ -1,26 +1,27 @@
 {
   "name": "overalls-outreach",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "type": "module",
   "private": true,
   "scripts": {
+    "start": "node server/index.js",
     "dev": "node server/index.js",
+    "build": "cd client && npm run build",
     "generate": "node scripts/generate-drafts.js",
     "test-connections": "node scripts/test-connection.js",
-    "auth-gmail": "node server/gmail-auth.js",
-    "send": "node -e \"import('./server/gmail-client.js').then(m => m.sendApprovedEmails())\"",
-    "fetch-linkedin": "node server/apify-linkedin.js",
-    "setup": "bash scripts/setup.sh"
+    "fetch-linkedin": "node server/apify-linkedin.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
     "apify-client": "^2.22.2",
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "googleapis": "^144.0.0",
+    "jsonwebtoken": "^9.0.3",
     "multer": "^2.0.2",
     "node-cron": "^3.0.3",
+    "pg": "^8.19.0",
     "xlsx": "^0.18.5"
   }
 }

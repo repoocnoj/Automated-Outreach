@@ -3,10 +3,8 @@ import React from "react";
 export default function Header({
   counts,
   onApproveAll,
-  onSendAll,
   onGenerate,
   onExport,
-  sendingAll,
   generating,
 }) {
   return (
@@ -116,26 +114,6 @@ export default function Header({
             }}
           >
             ✓ Approve All ({counts.pending})
-          </button>
-        )}
-        {counts.approved > 0 && (
-          <button
-            onClick={onSendAll}
-            disabled={sendingAll}
-            style={{
-              padding: "8px 20px",
-              borderRadius: 8,
-              border: "none",
-              background: sendingAll ? "#94A3B8" : "#1A1A1A",
-              color: "#fff",
-              cursor: sendingAll ? "wait" : "pointer",
-              fontSize: 12,
-              fontWeight: 600,
-            }}
-          >
-            {sendingAll
-              ? "Sending..."
-              : `Send ${counts.approved} Emails →`}
           </button>
         )}
       </div>
