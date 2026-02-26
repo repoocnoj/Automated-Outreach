@@ -552,11 +552,11 @@ app.get("/api/export/csv", authMiddleware, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// SERVE STATIC FRONTEND (in production)
+// SERVE STATIC FRONTEND
 // ═══════════════════════════════════════════════════════════════
 
-if (process.env.NODE_ENV === "production") {
-  const clientDist = path.join(__dirname, "..", "client", "dist");
+const clientDist = path.join(__dirname, "..", "client", "dist");
+if (fs.existsSync(clientDist)) {
   app.use(express.static(clientDist));
 
   // SPA fallback — serve index.html for all non-API routes
@@ -565,6 +565,7 @@ if (process.env.NODE_ENV === "production") {
       res.sendFile(path.join(clientDist, "index.html"));
     }
   });
+  console.log(`   Static files: serving from ${clientDist}`);
 }
 
 // ═══════════════════════════════════════════════════════════════
